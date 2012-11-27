@@ -44,8 +44,26 @@
 
 #include "cascadedetect.hpp"
 
+#include <chrono>
+
+using namespace std::chrono;
+double t_detectSingleScale = 0.0, t_multiLoopCalc = 0.0, t_groupRectangles = 0.0, t_detectMultiScaleInternal = 0.0;
+double t_parallelFor = 0.0;
+
 namespace cv
 {
+
+#define PROFILING
+
+#ifdef PROFILING
+#define PROFILE_FUNC(counter, func) \
+	system_clock::time_point counter ## _1 = system_clock::now(); \
+	func; \
+	system_clock::time_point counter ## _2 = system_clock::now(); \
+	counter += duration_cast<duration<double>>(counter ## _2 - counter ## _1).count();
+#else
+#define PROFILE_FUNC(counter, func) func;
+#endif
 
 // class for grouping object candidates, detected by Cascade Classifier, HOG etc.
 // instance of the class is to be passed to cv::partition (see cxoperations.hpp)
@@ -959,15 +977,25 @@ bool CascadeClassifier::detectSingleScale( const Mat& image, int stripCount, Siz
     vector<double> levelWeights;
     if( outputRejectLevels )
     {
-        parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
-            concurrentCandidates, rejectLevels, levelWeights, true, currentMask));
+        //parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
+        //    concurrentCandidates, rejectLevels, levelWeights, true, currentMask));
+        PROFILE_FUNC(t_parallelFor, parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
+            concurrentCandidates, rejectLevels, levelWeights, true, currentMask)));
+		//CascadeClassifierInvoker cci(*this, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, true, currentMask);
+		//cci(BlockedRange(0, stripCount));
+
         levels.insert( levels.end(), rejectLevels.begin(), rejectLevels.end() );
         weights.insert( weights.end(), levelWeights.begin(), levelWeights.end() );
     }
     else
     {
-         parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
-            concurrentCandidates, rejectLevels, levelWeights, false, currentMask));
+         //parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
+         //   concurrentCandidates, rejectLevels, levelWeights, false, currentMask));
+         PROFILE_FUNC(t_parallelFor, parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
+            concurrentCandidates, rejectLevels, levelWeights, false, currentMask)));
+		 //CascadeClassifierInvoker cgi(*this, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, false, currentMask);
+		 //cgi(BlockedRange(0, stripCount));
+
     }
     candidates.insert( candidates.end(), concurrentCandidates.begin(), concurrentCandidates.end() );
 
@@ -1045,6 +1073,8 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 
     for( double factor = 1; ; factor *= scaleFactor )
     {
+		system_clock::time_point t_multiLoopCalc_1 = system_clock::now();
+
         Size originalWindowSize = getOriginalWindowSize();
 
         Size windowSize( cvRound(originalWindowSize.width*factor), cvRound(originalWindowSize.height*factor) );
@@ -1083,8 +1113,19 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
         stripSize = processingRectSize.height;
     #endif
 
-        if( !detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
-            rejectLevels, levelWeights, outputRejectLevels ) )
+		system_clock::time_point t_multiLoopCalc_2 = system_clock::now();
+		t_multiLoopCalc += duration_cast<duration<double>>(t_multiLoopCalc_2 - t_multiLoopCalc_1).count();
+
+		//int singlescale_ret = detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
+        //   rejectLevels, levelWeights, outputRejectLevels );
+
+		PROFILE_FUNC(t_detectSingleScale, int singlescale_ret = detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
+            rejectLevels, levelWeights, outputRejectLevels )
+		);
+
+        //if( !detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
+        //    rejectLevels, levelWeights, outputRejectLevels ) )
+		if (!singlescale_ret)
             break;
     }
 
@@ -1094,11 +1135,13 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 
     if( outputRejectLevels )
     {
-        groupRectangles( objects, rejectLevels, levelWeights, minNeighbors, GROUP_EPS );
+        //groupRectangles( objects, rejectLevels, levelWeights, minNeighbors, GROUP_EPS );
+        PROFILE_FUNC(t_groupRectangles, groupRectangles( objects, rejectLevels, levelWeights, minNeighbors, GROUP_EPS ));
     }
     else
     {
-        groupRectangles( objects, minNeighbors, GROUP_EPS );
+        //groupRectangles( objects, minNeighbors, GROUP_EPS );
+        PROFILE_FUNC(t_groupRectangles, groupRectangles( objects, minNeighbors, GROUP_EPS ));
     }
 }
 
@@ -1108,8 +1151,11 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 {
     vector<int> fakeLevels;
     vector<double> fakeWeights;
-    detectMultiScale( image, objects, fakeLevels, fakeWeights, scaleFactor,
-        minNeighbors, flags, minObjectSize, maxObjectSize, false );
+    //detectMultiScale( image, objects, fakeLevels, fakeWeights, scaleFactor,
+    //    minNeighbors, flags, minObjectSize, maxObjectSize, false );
+	PROFILE_FUNC(t_detectMultiScaleInternal, detectMultiScale( image, objects, fakeLevels, fakeWeights, scaleFactor,
+        minNeighbors, flags, minObjectSize, maxObjectSize, false )
+	);
 }
 
 bool CascadeClassifier::Data::read(const FileNode &root)

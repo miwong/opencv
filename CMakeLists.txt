@@ -483,6 +483,8 @@ if(NOT CMAKE_GENERATOR MATCHES "Xcode|Visual Studio")
 endif()
 
 # ========================== C/C++ options ==========================
+set(CMAKE_CXX_FLAGS -std=c++0x ${CMAKE_CXX_FLAGS})
+
 status("")
 status("  C/C++:")
 status("    Built as dynamic libs?:" BUILD_SHARED_LIBS THEN YES ELSE NO)
