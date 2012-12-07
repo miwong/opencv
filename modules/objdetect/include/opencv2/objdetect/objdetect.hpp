@@ -398,7 +398,7 @@ public:
     int getFeatureType() const;
     bool setImage( const Mat& );
 
-protected:
+//protected:
     //virtual bool detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
     //                                int stripSize, int yStep, double factor, vector<Rect>& candidates );
 
