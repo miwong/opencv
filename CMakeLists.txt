@@ -483,7 +483,6 @@ if(NOT CMAKE_GENERATOR MATCHES "Xcode|Visual Studio")
 endif()
 
 # ========================== C/C++ options ==========================
-set(CMAKE_CXX_FLAGS -std=c++0x ${CMAKE_CXX_FLAGS})
 
 status("")
 status("  C/C++:")
