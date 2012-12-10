@@ -1203,6 +1203,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
     objects.resize(candidates.size());
     std::copy(candidates.begin(), candidates.end(), objects.begin());
 
+	/*
     if( outputRejectLevels )
     {
         //groupRectangles( objects, rejectLevels, levelWeights, minNeighbors, GROUP_EPS );
@@ -1213,6 +1214,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
         //groupRectangles( objects, minNeighbors, GROUP_EPS );
         PROFILE_FUNC(t_groupRectangles, groupRectangles( objects, minNeighbors, GROUP_EPS ));
     }
+	*/
 }
 
 void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& objects,
@@ -1226,6 +1228,12 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 	PROFILE_FUNC(t_detectMultiScaleInternal, detectMultiScale( image, objects, fakeLevels, fakeWeights, scaleFactor,
         minNeighbors, flags, minObjectSize, maxObjectSize, false )
 	);
+}
+
+void CascadeClassifier::groupRectanglesPipeline(vector<Rect>& objects, int minNeighbors)
+{
+    const double GROUP_EPS = 0.2;
+	PROFILE_FUNC(t_groupRectangles, groupRectangles( objects, minNeighbors, GROUP_EPS ));
 }
 
 bool CascadeClassifier::Data::read(const FileNode &root)
