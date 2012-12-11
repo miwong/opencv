@@ -402,7 +402,7 @@ public:
     //virtual bool detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
     //                                int stripSize, int yStep, double factor, vector<Rect>& candidates );
 
-    virtual bool detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
+    virtual bool detectSingleScale( int threadId, const Mat& image, int stripCount, Size processingRectSize,
                                     int stripSize, int yStep, double factor, vector<Rect>& candidates,
                                     vector<int>& rejectLevels, vector<double>& levelWeights, bool outputRejectLevels=false);
 
@@ -468,7 +468,7 @@ protected:
     };
 
     Data data;
-    Ptr<FeatureEvaluator> featureEvaluator;
+    Ptr<FeatureEvaluator> featureEvaluator[4];
     Ptr<CvHaarClassifierCascade> oldCascade;
 
 public:

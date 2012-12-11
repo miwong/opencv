@@ -822,7 +822,10 @@ bool CascadeClassifier::load(const string& filename)
 {
     oldCascade.release();
     data = Data();
-    featureEvaluator.release();
+    featureEvaluator[0].release();
+    featureEvaluator[1].release();
+    featureEvaluator[2].release();
+    featureEvaluator[3].release();
 
     FileStorage fs(filename, FileStorage::READ);
     if( !fs.isOpened() )
@@ -896,11 +899,11 @@ void CascadeClassifier::setFaceDetectionMaskGenerator()
 
 struct CascadeClassifierInvoker
 {
-    CascadeClassifierInvoker( CascadeClassifier& _cc, Ptr<FeatureEvaluator>& evaluator, Size _sz1, int _stripSize, int _yStep, double _factor,
+    CascadeClassifierInvoker( CascadeClassifier& _cc, int threadId, Size _sz1, int _stripSize, int _yStep, double _factor,
         ConcurrentRectVector& _vec, vector<int>& _levels, vector<double>& _weights, bool outputLevels, const Mat& _mask)
     {
         classifier = &_cc;
-		featureEvaluator = evaluator;
+		thread = threadId;
         processingRectSize = _sz1;
         stripSize = _stripSize;
         yStep = _yStep;
@@ -965,7 +968,7 @@ struct CascadeClassifierInvoker
 	void operator()(const BlockedRange& range) const
     {
 		//std::cout << "Inside operator.  BlockedRange: " << range.begin() << " - " << range.end() << std::endl;
-        Ptr<FeatureEvaluator> evaluator = classifier->featureEvaluator->clone();
+        Ptr<FeatureEvaluator> evaluator = classifier->featureEvaluator[thread]->clone();
 
         Size winSize(cvRound(classifier->data.origWinSize.width * scalingFactor), cvRound(classifier->data.origWinSize.height * scalingFactor));
 
@@ -1006,7 +1009,7 @@ struct CascadeClassifierInvoker
 #endif
 
     CascadeClassifier* classifier;
-    Ptr<FeatureEvaluator> featureEvaluator;
+    int thread;
     ConcurrentRectVector* rectangles;
     Size processingRectSize;
     int stripSize, yStep;
@@ -1018,12 +1021,13 @@ struct CascadeClassifierInvoker
 
 struct getRect { Rect operator ()(const CvAvgComp& e) const { return e.rect; } };
 
-bool CascadeClassifier::detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
+bool CascadeClassifier::detectSingleScale( int threadId, 
+										   const Mat& image, int stripCount, Size processingRectSize,
                                            int stripSize, int yStep, double factor, vector<Rect>& candidates,
                                            vector<int>& levels, vector<double>& weights, bool outputRejectLevels )
 {
 	//std::cout << "New factor. stripcount = " << stripCount << std::endl;
-    if( !featureEvaluator->setImage( image, data.origWinSize ) )
+    if( !featureEvaluator[threadId]->setImage( image, data.origWinSize ) )
         return false;
 
     Mat currentMask;
@@ -1041,7 +1045,7 @@ bool CascadeClassifier::detectSingleScale( const Mat& image, int stripCount, Siz
         //PROFILE_FUNC(t_parallelFor, parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
         //    concurrentCandidates, rejectLevels, levelWeights, true, currentMask)));
 		
-		CascadeClassifierInvoker cci(*this, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, true, currentMask);
+		CascadeClassifierInvoker cci(*this, threadId, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, true, currentMask);
 		for (int i = 0; i < stripCount; i++) {
 			PROFILE_FUNC(t_parallelFor, cci(BlockedRange(i, i+1)));
 		}
@@ -1056,7 +1060,7 @@ bool CascadeClassifier::detectSingleScale( const Mat& image, int stripCount, Siz
          //PROFILE_FUNC(t_parallelFor, parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
          //   concurrentCandidates, rejectLevels, levelWeights, false, currentMask)));
 		 
-		 CascadeClassifierInvoker cgi(*this, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, false, currentMask);
+		 CascadeClassifierInvoker cgi(*this, threadId, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, false, currentMask);
 		 for (int i = 0; i < stripCount; i++) {
 			 PROFILE_FUNC(t_parallelFor, cgi(BlockedRange(i, i+1)));
 		 }
@@ -1075,7 +1079,7 @@ bool CascadeClassifier::isOldFormatCascade() const
 
 int CascadeClassifier::getFeatureType() const
 {
-    return featureEvaluator->getFeatureType();
+    return featureEvaluator[0]->getFeatureType();
 }
 
 Size CascadeClassifier::getOriginalWindowSize() const
@@ -1085,7 +1089,7 @@ Size CascadeClassifier::getOriginalWindowSize() const
 
 bool CascadeClassifier::setImage(const Mat& image)
 {
-    return featureEvaluator->setImage(image, data.origWinSize);
+    return featureEvaluator[0]->setImage(image, data.origWinSize);
 }
 
 struct factorArgs {
@@ -1101,6 +1105,7 @@ struct factorArgs {
 	vector<int> *rejectLevels;
 	vector<double> *levelWeights;
 	CascadeClassifier *classifier;
+	int threadId;
 };
 
 void *detectFactoredScale(void *args);
@@ -1119,6 +1124,7 @@ void *detectFactoredScale(void *args) {
 	vector<int>& rejectLevels = *(thread_args->rejectLevels);
 	vector<double>& levelWeights = *(thread_args->levelWeights);
 	CascadeClassifier *classifier = thread_args->classifier;
+	int threadId = thread_args->threadId;
 
 	Size windowSize( cvRound(originalWindowSize.width*factor), cvRound(originalWindowSize.height*factor) );
 	Size scaledImageSize( cvRound( grayImage.cols/factor ), cvRound( grayImage.rows/factor ) );
@@ -1159,7 +1165,7 @@ void *detectFactoredScale(void *args) {
 	//int singlescale_ret = detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
 	//   rejectLevels, levelWeights, outputRejectLevels );
 
-	PROFILE_FUNC(t_detectSingleScale, int singlescale_ret = classifier->detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
+	PROFILE_FUNC(t_detectSingleScale, int singlescale_ret = classifier->detectSingleScale( threadId, scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
 		rejectLevels, levelWeights, outputRejectLevels )
 	);
 
@@ -1238,6 +1244,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 		threadArgs[i].rejectLevels = &(threadRejectLevels[i]);
 		threadArgs[i].levelWeights = &(threadLevelWeights[i]);
 		threadArgs[i].classifier = this;
+		threadArgs[i].threadId = i;
 	}
 
     for( double factor = 1; ; factor *= (scaleFactor * scaleFactor * scaleFactor * scaleFactor) )
@@ -1259,6 +1266,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 		pthread_join(threads[2], (void **)(&status[2]));
 		pthread_join(threads[3], (void **)(&status[3]));
 
+		/*
 		for (int i = 0; i < NUM_THREADS; i++) {
 			if (!status[i]) {
 				rejectLevels.insert(rejectLevels.end(), threadRejectLevels[i].begin(), threadRejectLevels[i].end());
@@ -1270,6 +1278,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 			threadLevelWeights[i].clear();
 			threadCandidates[i].clear();
 		}
+		*/
 
 		if (status[0] || status[1] || status[2] || status[3]) {
 			break;
@@ -1351,13 +1360,13 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 	levelWeights.insert(levelWeights.end(), threadLevelWeights[1].begin(), threadLevelWeights[1].end());
 	levelWeights.insert(levelWeights.end(), threadLevelWeights[2].begin(), threadLevelWeights[2].end());
 	levelWeights.insert(levelWeights.end(), threadLevelWeights[3].begin(), threadLevelWeights[3].end());
+	*/
 
 	//candidates.reserve(threadCandidates[0].size() + threadCandidates[1].size() + threadCandidates[2].size() + threadCandidates[3].size());
 	candidates.insert(candidates.end(), threadCandidates[0].begin(), threadCandidates[0].end());
 	candidates.insert(candidates.end(), threadCandidates[1].begin(), threadCandidates[1].end());
 	candidates.insert(candidates.end(), threadCandidates[2].begin(), threadCandidates[2].end());
 	candidates.insert(candidates.end(), threadCandidates[3].begin(), threadCandidates[3].end());
-	*/
 
     objects.resize(candidates.size());
     std::copy(candidates.begin(), candidates.end(), objects.begin());
@@ -1511,12 +1520,18 @@ bool CascadeClassifier::read(const FileNode& root)
         return false;
 
     // load features
-    featureEvaluator = FeatureEvaluator::create(data.featureType);
+    featureEvaluator[0] = FeatureEvaluator::create(data.featureType);
+    featureEvaluator[1] = FeatureEvaluator::create(data.featureType);
+    featureEvaluator[2] = FeatureEvaluator::create(data.featureType);
+    featureEvaluator[3] = FeatureEvaluator::create(data.featureType);
     FileNode fn = root[CC_FEATURES];
     if( fn.empty() )
         return false;
 
-    return featureEvaluator->read(fn);
+	featureEvaluator[0]->read(fn);
+	featureEvaluator[1]->read(fn);
+	featureEvaluator[2]->read(fn);
+    return featureEvaluator[3]->read(fn);
 }
 
 template<> void Ptr<CvHaarClassifierCascade>::delete_obj()
