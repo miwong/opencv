@@ -44,6 +44,7 @@
 #define __OPENCV_OBJDETECT_HPP__
 
 #include "opencv2/core/core.hpp"
+#include "opencv2/core/internal.hpp"
 
 #ifdef __cplusplus
 #include <map>
@@ -398,15 +399,12 @@ public:
     int getFeatureType() const;
     bool setImage( const Mat& );
 
-	static void groupRectanglesPipeline(vector<Rect>& objects, int minNeighbors);
-
-protected:
     //virtual bool detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
     //                                int stripSize, int yStep, double factor, vector<Rect>& candidates );
 
     virtual bool detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
                                     int stripSize, int yStep, double factor, vector<Rect>& candidates,
-                                    vector<int>& rejectLevels, vector<double>& levelWeights, bool outputRejectLevels=false);
+                                    vector<int>& rejectLevels, vector<double>& levelWeights, bool outputRejectLevels=false, int id=-1);
 
 protected:
     enum { BOOST = 0 };
@@ -470,7 +468,8 @@ protected:
     };
 
     Data data;
-    Ptr<FeatureEvaluator> featureEvaluator;
+#define MAX_THREADS 8
+    Ptr<FeatureEvaluator> featureEvaluator[MAX_THREADS];
     Ptr<CvHaarClassifierCascade> oldCascade;
 
 public:

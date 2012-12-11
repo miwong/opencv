@@ -45,6 +45,7 @@
 #include "cascadedetect.hpp"
 
 #include <chrono>
+#include <pthread.h>
 
 using namespace std::chrono;
 double t_detectSingleScale = 0.0, t_multiLoopCalc = 0.0, t_groupRectangles = 0.0, t_detectMultiScaleInternal = 0.0;
@@ -53,7 +54,7 @@ double t_parallelFor = 0.0;
 namespace cv
 {
 
-//#define PROFILING
+#define PROFILING
 
 #ifdef PROFILING
 #define PROFILE_FUNC(counter, func) \
@@ -822,7 +823,8 @@ bool CascadeClassifier::load(const string& filename)
 {
     oldCascade.release();
     data = Data();
-    featureEvaluator.release();
+    for (int i = 0; i < MAX_THREADS; i++)
+    featureEvaluator[i].release();
 
     FileStorage fs(filename, FileStorage::READ);
     if( !fs.isOpened() )
@@ -897,7 +899,7 @@ void CascadeClassifier::setFaceDetectionMaskGenerator()
 struct CascadeClassifierInvoker
 {
     CascadeClassifierInvoker( CascadeClassifier& _cc, Size _sz1, int _stripSize, int _yStep, double _factor,
-        ConcurrentRectVector& _vec, vector<int>& _levels, vector<double>& _weights, bool outputLevels, const Mat& _mask)
+        ConcurrentRectVector& _vec, vector<int>& _levels, vector<double>& _weights, bool outputLevels, const Mat& _mask, int _id)
     {
         classifier = &_cc;
         processingRectSize = _sz1;
@@ -908,73 +910,20 @@ struct CascadeClassifierInvoker
         rejectLevels  = outputLevels ? &_levels : 0;
         levelWeights  = outputLevels ? &_weights : 0;
         mask=_mask;
+        id = _id;
     }
 
-#if 0
-	void operator()(const BlockedRange& range) const
+    void operator()(const BlockedRange& range) const
     {
-		//std::cout << "Inside operator.  BlockedRange: " << range.begin() << " - " << range.end() << std::endl;
-        Ptr<FeatureEvaluator> evaluator = classifier->featureEvaluator->clone();
-
-        Size winSize(cvRound(classifier->data.origWinSize.width * scalingFactor), cvRound(classifier->data.origWinSize.height * scalingFactor));
-
-        int y1 = range.begin() * stripSize;
-        int y2 = min(range.end() * stripSize, processingRectSize.height);
-		int yStep2 = yStep*150;
-
-        //for( int y = y1; y < y2; y += yStep2 )
-		for( int x = 0; x < processingRectSize.width; x += yStep2 )
-        {
-            //for( int x = 0; x < processingRectSize.width; x += yStep )
-			for( int y = y1; y < y2; y += yStep )
-            {
-				//for (int temp = y; temp < y + yStep2; temp += yStep) {
-				for (int temp = x; temp < x + yStep2; temp += yStep) {
-					if ( (!mask.empty()) && (mask.at<uchar>(Point(x,temp))==0)) {
-						continue;
-					}
-
-					double gypWeight;
-					int result = classifier->runAt(evaluator, Point(temp, y), gypWeight);
-					if( rejectLevels )
-					{
-						if( result == 1 )
-							result =  -(int)classifier->data.stages.size();
-						if( classifier->data.stages.size() + result < 4 )
-						{
-							rectangles->push_back(Rect(cvRound(temp*scalingFactor), cvRound(y*scalingFactor), winSize.width, winSize.height));
-							rejectLevels->push_back(-result);
-							levelWeights->push_back(gypWeight);
-						}
-					}
-					else if( result > 0 )
-						rectangles->push_back(Rect(cvRound(temp*scalingFactor), cvRound(y*scalingFactor),
-												   winSize.width, winSize.height));
-
-					if( result == 0) {
-						temp += yStep;
-						//x += yStep;
-						//y += yStep;
-					}
-				}
-            }
-        }
-    }
-#else
-	void operator()(const BlockedRange& range) const
-    {
-		//std::cout << "Inside operator.  BlockedRange: " << range.begin() << " - " << range.end() << std::endl;
-        Ptr<FeatureEvaluator> evaluator = classifier->featureEvaluator->clone();
+        Ptr<FeatureEvaluator> evaluator = classifier->featureEvaluator[id]->clone();
 
         Size winSize(cvRound(classifier->data.origWinSize.width * scalingFactor), cvRound(classifier->data.origWinSize.height * scalingFactor));
 
         int y1 = range.begin() * stripSize;
         int y2 = min(range.end() * stripSize, processingRectSize.height);
         for( int y = y1; y < y2; y += yStep )
-		//for( int x = 0; x < processingRectSize.width; x += yStep )
         {
             for( int x = 0; x < processingRectSize.width; x += yStep )
-			//for( int y = y1; y < y2; y += yStep )
             {
                 if ( (!mask.empty()) && (mask.at<uchar>(Point(x,y))==0)) {
                     continue;
@@ -997,12 +946,10 @@ struct CascadeClassifierInvoker
                     rectangles->push_back(Rect(cvRound(x*scalingFactor), cvRound(y*scalingFactor),
                                                winSize.width, winSize.height));
                 if( result == 0 )
-                    //y += yStep;
                     x += yStep;
             }
         }
     }
-#endif
 
     CascadeClassifier* classifier;
     ConcurrentRectVector* rectangles;
@@ -1012,16 +959,16 @@ struct CascadeClassifierInvoker
     vector<int> *rejectLevels;
     vector<double> *levelWeights;
     Mat mask;
+    int id;
 };
 
 struct getRect { Rect operator ()(const CvAvgComp& e) const { return e.rect; } };
 
 bool CascadeClassifier::detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
                                            int stripSize, int yStep, double factor, vector<Rect>& candidates,
-                                           vector<int>& levels, vector<double>& weights, bool outputRejectLevels )
+                                           vector<int>& levels, vector<double>& weights, bool outputRejectLevels, int id )
 {
-	//std::cout << "New factor. stripcount = " << stripCount << std::endl;
-    if( !featureEvaluator->setImage( image, data.origWinSize ) )
+    if( !featureEvaluator[id]->setImage( image, data.origWinSize ) )
         return false;
 
     Mat currentMask;
@@ -1036,14 +983,11 @@ bool CascadeClassifier::detectSingleScale( const Mat& image, int stripCount, Siz
     {
         //parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
         //    concurrentCandidates, rejectLevels, levelWeights, true, currentMask));
-        PROFILE_FUNC(t_parallelFor, parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
-            concurrentCandidates, rejectLevels, levelWeights, true, currentMask)));
-		/*
-		CascadeClassifierInvoker cci(*this, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, true, currentMask);
-		for (int i = 0; i < stripCount; i++) {
-			PROFILE_FUNC(t_parallelFor, cci(BlockedRange(i, i+1)));
-		}
-		*/
+        //PROFILE_FUNC(t_parallelFor, parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
+        //    concurrentCandidates, rejectLevels, levelWeights, true, currentMask)));
+        CascadeClassifierInvoker cci( *this, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, true, currentMask, id);
+        cci(BlockedRange(0, stripCount));
+
         levels.insert( levels.end(), rejectLevels.begin(), rejectLevels.end() );
         weights.insert( weights.end(), levelWeights.begin(), levelWeights.end() );
     }
@@ -1051,14 +995,11 @@ bool CascadeClassifier::detectSingleScale( const Mat& image, int stripCount, Siz
     {
          //parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
          //   concurrentCandidates, rejectLevels, levelWeights, false, currentMask));
-         PROFILE_FUNC(t_parallelFor, parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
-            concurrentCandidates, rejectLevels, levelWeights, false, currentMask)));
-		 /*
-		 CascadeClassifierInvoker cgi(*this, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, false, currentMask);
-		 for (int i = 0; i < stripCount; i++) {
-			 PROFILE_FUNC(t_parallelFor, cgi(BlockedRange(i, i+1)));
-		 }
-		 */
+         //PROFILE_FUNC(t_parallelFor, parallel_for(BlockedRange(0, stripCount), CascadeClassifierInvoker( *this, processingRectSize, stripSize, yStep, factor,
+         //   concurrentCandidates, rejectLevels, levelWeights, false, currentMask)));
+         CascadeClassifierInvoker cci( *this, processingRectSize, stripSize, yStep, factor, concurrentCandidates, rejectLevels, levelWeights, false, currentMask, id);
+         cci(BlockedRange(0, stripCount));
+
     }
     candidates.insert( candidates.end(), concurrentCandidates.begin(), concurrentCandidates.end() );
 
@@ -1073,7 +1014,7 @@ bool CascadeClassifier::isOldFormatCascade() const
 
 int CascadeClassifier::getFeatureType() const
 {
-    return featureEvaluator->getFeatureType();
+    return featureEvaluator[0]->getFeatureType();
 }
 
 Size CascadeClassifier::getOriginalWindowSize() const
@@ -1083,8 +1024,32 @@ Size CascadeClassifier::getOriginalWindowSize() const
 
 bool CascadeClassifier::setImage(const Mat& image)
 {
-    return featureEvaluator->setImage(image, data.origWinSize);
+    return featureEvaluator[0]->setImage(image, data.origWinSize);
 }
+
+void *detectFactoredScale(void* arguments);
+//
+struct thread_data{
+    cv::CascadeClassifier* casClass;
+    cv::Mat* grayImage;
+    cv::Mat* imageBuffer;
+    Size originalWindowSize;
+    Size maxObjectSize;
+    Size minObjectSize;
+    double factor;
+    double scaleFactor;
+    std::vector<Rect>* candidates;
+    std::vector<int>* rejectLevels;
+    std::vector<double>* levelWeights;
+    bool outputRejectLevels;
+    bool returnValue;
+    int id;
+//#define DYNAMIC
+#ifdef DYNAMIC
+    pthread_mutex_t* global_lock;
+    double* global_factor;
+#endif
+};
 
 void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& objects,
                                           vector<int>& rejectLevels,
@@ -1093,7 +1058,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
                                           int flags, Size minObjectSize, Size maxObjectSize,
                                           bool outputRejectLevels )
 {
-    //const double GROUP_EPS = 0.2;
+    const double GROUP_EPS = 0.2;
 
     CV_Assert( scaleFactor > 1 && image.depth() == CV_8U );
 
@@ -1134,76 +1099,57 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
     Mat imageBuffer(image.rows + 1, image.cols + 1, CV_8U);
     vector<Rect> candidates;
 
-	//FILE *loopTimeFile = fopen("profiling/looptime.txt", "w"); 
-	
-	Size originalWindowSize = getOriginalWindowSize();
+#define NUM_THREADS 8
+    Size originalWindowSize = getOriginalWindowSize();
+    pthread_t threads[NUM_THREADS];
+    struct thread_data thread_args[MAX_THREADS];        
+    int i = 0;
+#ifdef DYNAMIC
+    pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER;
+    double global_factor = 1;
+#endif
 
-    for( double factor = 1; ; factor *= scaleFactor )
-    {
-		system_clock::time_point t_multiLoopCalc_1 = system_clock::now();
-		//system_clock::time_point t_loop_1 = t_multiLoopCalc_1;
+    double factor = 1;
 
-        Size windowSize( cvRound(originalWindowSize.width*factor), cvRound(originalWindowSize.height*factor) );
-        Size scaledImageSize( cvRound( grayImage.cols/factor ), cvRound( grayImage.rows/factor ) );
-        Size processingRectSize( scaledImageSize.width - originalWindowSize.width + 1, scaledImageSize.height - originalWindowSize.height + 1 );
-
-        if( processingRectSize.width <= 0 || processingRectSize.height <= 0 )
-            break;
-        if( windowSize.width > maxObjectSize.width || windowSize.height > maxObjectSize.height )
-            break;
-        if( windowSize.width < minObjectSize.width || windowSize.height < minObjectSize.height )
-            continue;
-
-        Mat scaledImage( scaledImageSize, CV_8U, imageBuffer.data );
-        resize( grayImage, scaledImage, scaledImageSize, 0, 0, CV_INTER_LINEAR );
-
-        int yStep;
-        if( getFeatureType() == cv::FeatureEvaluator::HOG )
-        {
-            yStep = 4;
+    for ( i = 0; i < NUM_THREADS; i++) {
+        thread_args[i].casClass = this;
+        thread_args[i].grayImage = &grayImage;
+        thread_args[i].imageBuffer = &imageBuffer;
+        thread_args[i].originalWindowSize = originalWindowSize;
+        thread_args[i].maxObjectSize = maxObjectSize;
+        thread_args[i].minObjectSize = minObjectSize;
+        thread_args[i].factor = factor;
+        thread_args[i].scaleFactor = 1;
+        for (int j = 0; j < NUM_THREADS; j++) {
+            thread_args[i].scaleFactor *= scaleFactor;
         }
-        else
-        {
-            yStep = factor > 2. ? 1 : 2;
+        thread_args[i].candidates = &candidates;
+        thread_args[i].rejectLevels = &rejectLevels;
+        thread_args[i].levelWeights = &levelWeights;
+        thread_args[i].outputRejectLevels = outputRejectLevels;
+        thread_args[i].id = i;
+#ifdef DYNAMIC
+        thread_args[i].global_lock = &global_lock;
+        thread_args[i].global_factor = &global_factor;
+        thread_args[i].scaleFactor = scaleFactor;
+#endif
+			
+        if (i < NUM_THREADS-1) {
+            pthread_create(&threads[i], NULL, detectFactoredScale, (void *)&thread_args[i]);
+        } else {
+            detectFactoredScale((void *)&thread_args[NUM_THREADS-1]);
         }
-
-        int stripCount, stripSize;
-
-    #ifdef HAVE_TBB
-        const int PTS_PER_THREAD = 1000;
-        stripCount = ((processingRectSize.width/yStep)*(processingRectSize.height + yStep-1)/yStep + PTS_PER_THREAD/2)/PTS_PER_THREAD;
-        stripCount = std::min(std::max(stripCount, 1), 100);
-        stripSize = (((processingRectSize.height + stripCount - 1)/stripCount + yStep-1)/yStep)*yStep;
-    #else
-        stripCount = 1;
-        stripSize = processingRectSize.height;
-    #endif
-
-		system_clock::time_point t_multiLoopCalc_2 = system_clock::now();
-		t_multiLoopCalc += duration_cast<duration<double>>(t_multiLoopCalc_2 - t_multiLoopCalc_1).count();
-
-		//int singlescale_ret = detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
-        //   rejectLevels, levelWeights, outputRejectLevels );
-
-		PROFILE_FUNC(t_detectSingleScale, int singlescale_ret = detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
-            rejectLevels, levelWeights, outputRejectLevels )
-		);
-
-		//system_clock::time_point t_loop_2 = system_clock::now();
-		//fprintf(loopTimeFile, "%f\n", duration_cast<duration<double>>(t_loop_2 - t_loop_1).count());
-
-        //if( !detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, factor, candidates,
-        //    rejectLevels, levelWeights, outputRejectLevels ) )
-		if (!singlescale_ret)
-            break;
+        factor *= scaleFactor;
     }
 
-	//fclose(loopTimeFile);
+    for ( i = 0; i < (NUM_THREADS-1); i++) {
+        pthread_join(threads[i], NULL);
+    }
+
 
     objects.resize(candidates.size());
     std::copy(candidates.begin(), candidates.end(), objects.begin());
 
-	/*
     if( outputRejectLevels )
     {
         //groupRectangles( objects, rejectLevels, levelWeights, minNeighbors, GROUP_EPS );
@@ -1214,7 +1160,70 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
         //groupRectangles( objects, minNeighbors, GROUP_EPS );
         PROFILE_FUNC(t_groupRectangles, groupRectangles( objects, minNeighbors, GROUP_EPS ));
     }
-	*/
+}
+
+//bool detectFactoredScale(CascadeClassifier* casClass, const Mat& grayImage, const Mat& imageBuffer, Size originalWindowSize, Size maxObjectSize
+  //                                          , Size minObjectSize, double factor, vector<Rect>& candidates,
+//                                            vector<int>& rejectLevels, vector<double>& levelWeights, bool outputRejectLevels )
+void *detectFactoredScale(void* arguments)
+{
+    struct thread_data *args = (struct thread_data *)arguments;
+
+    bool returnValue = false;
+#ifndef DYNAMIC
+    for( ; ; args->factor *= args->scaleFactor ) {
+#else
+    for( ; ; ) {
+        pthread_mutex_lock(args->global_lock);
+        args->factor = *args->global_factor;
+        *args->global_factor = args->factor * args->scaleFactor;
+        pthread_mutex_unlock(args->global_lock);
+#endif
+
+        Size windowSize( cvRound((args -> originalWindowSize).width*(args -> factor)), cvRound((args -> originalWindowSize).height*(args -> factor)) );
+        Size scaledImageSize( cvRound( (*(args->grayImage)).cols/(args -> factor) ), cvRound( (*(args->grayImage)).rows/(args -> factor) ) );
+        Size processingRectSize( scaledImageSize.width - (args -> originalWindowSize).width + 1, scaledImageSize.height - (args -> originalWindowSize).height + 1 );
+    //return (void *) returnValue;
+        if( processingRectSize.width <= 0 ||  processingRectSize.height <= 0 )
+            break;//pthread_exit((void *) &returnValue);//return false;
+        if( windowSize.width > (args -> maxObjectSize).width || windowSize.height > (args -> maxObjectSize).height )
+            break;//return  NULL; //false;
+        if( windowSize.width < (args -> minObjectSize).width || windowSize.height < (args -> minObjectSize).height ){
+            continue;
+        }
+
+        Mat scaledImage( scaledImageSize, CV_8U, *(args->imageBuffer)->data );
+        resize( *(args->grayImage), scaledImage, scaledImageSize, 0, 0, CV_INTER_LINEAR );
+
+        int yStep;
+        if( (args -> casClass)->getFeatureType() == cv::FeatureEvaluator::HOG )
+        {
+            yStep = 4;
+        }
+        else
+        {
+            yStep = args->factor > 2. ? 1 : 2;
+        }
+        int stripCount, stripSize;
+      #ifdef HAVE_TBB
+        const int PTS_PER_THREAD = 1000;
+        stripCount = ((processingRectSize.width/yStep)*(processingRectSize.height + yStep-1)/yStep + PTS_PER_THREAD/2)/PTS_PER_THREAD;
+        stripCount = std::min(std::max(stripCount, 1), 100);
+        stripSize = (((processingRectSize.height + stripCount - 1)/stripCount + yStep-1)/yStep)*yStep;
+      #else
+        stripCount = 1;
+        stripSize = processingRectSize.height;
+      #endif
+
+        if( !args->casClass->detectSingleScale( scaledImage, stripCount, processingRectSize, stripSize, yStep, (args -> factor), *(args -> candidates),
+            *(args -> rejectLevels), *(args -> levelWeights), (args -> outputRejectLevels), args->id ) )
+        {
+            return (void *) returnValue;
+        }
+    }
+   returnValue = true;
+   return (void *) returnValue;
+
 }
 
 void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& objects,
@@ -1228,12 +1237,6 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 	PROFILE_FUNC(t_detectMultiScaleInternal, detectMultiScale( image, objects, fakeLevels, fakeWeights, scaleFactor,
         minNeighbors, flags, minObjectSize, maxObjectSize, false )
 	);
-}
-
-void CascadeClassifier::groupRectanglesPipeline(vector<Rect>& objects, int minNeighbors)
-{
-    const double GROUP_EPS = 0.2;
-	PROFILE_FUNC(t_groupRectangles, groupRectangles( objects, minNeighbors, GROUP_EPS ));
 }
 
 bool CascadeClassifier::Data::read(const FileNode &root)
@@ -1352,12 +1355,17 @@ bool CascadeClassifier::read(const FileNode& root)
         return false;
 
     // load features
-    featureEvaluator = FeatureEvaluator::create(data.featureType);
+    for (int i = 0; i < MAX_THREADS; i++)
+    featureEvaluator[i] = FeatureEvaluator::create(data.featureType);
     FileNode fn = root[CC_FEATURES];
     if( fn.empty() )
         return false;
 
-    return featureEvaluator->read(fn);
+    bool ret = featureEvaluator[0]->read(fn);
+    for (int i = 1; i < MAX_THREADS; i++)
+    featureEvaluator[i]->read(fn);
+    return ret;
+    //return featureEvaluator->read(fn);
 }
 
 template<> void Ptr<CvHaarClassifierCascade>::delete_obj()
