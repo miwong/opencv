@@ -53,7 +53,7 @@ double t_parallelFor = 0.0;
 namespace cv
 {
 
-#define PROFILING
+//#define PROFILING
 
 #ifdef PROFILING
 #define PROFILE_FUNC(counter, func) \
@@ -1093,7 +1093,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
                                           int flags, Size minObjectSize, Size maxObjectSize,
                                           bool outputRejectLevels )
 {
-    const double GROUP_EPS = 0.2;
+    //const double GROUP_EPS = 0.2;
 
     CV_Assert( scaleFactor > 1 && image.depth() == CV_8U );
 
@@ -1135,13 +1135,13 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
     vector<Rect> candidates;
 
 	//FILE *loopTimeFile = fopen("profiling/looptime.txt", "w"); 
+	
+	Size originalWindowSize = getOriginalWindowSize();
 
     for( double factor = 1; ; factor *= scaleFactor )
     {
 		system_clock::time_point t_multiLoopCalc_1 = system_clock::now();
 		//system_clock::time_point t_loop_1 = t_multiLoopCalc_1;
-
-        Size originalWindowSize = getOriginalWindowSize();
 
         Size windowSize( cvRound(originalWindowSize.width*factor), cvRound(originalWindowSize.height*factor) );
         Size scaledImageSize( cvRound( grayImage.cols/factor ), cvRound( grayImage.rows/factor ) );

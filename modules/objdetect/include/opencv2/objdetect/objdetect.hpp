@@ -398,7 +398,7 @@ public:
     int getFeatureType() const;
     bool setImage( const Mat& );
 
-	void groupRectanglesPipeline(vector<Rect>& objects, int minNeighbors);
+	static void groupRectanglesPipeline(vector<Rect>& objects, int minNeighbors);
 
 protected:
     //virtual bool detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
