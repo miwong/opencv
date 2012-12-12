@@ -54,7 +54,7 @@ double t_parallelFor = 0.0;
 namespace cv
 {
 
-#define PROFILING
+//#define PROFILING
 
 #ifdef PROFILING
 #define PROFILE_FUNC(counter, func) \
@@ -1044,7 +1044,7 @@ struct thread_data{
     bool outputRejectLevels;
     bool returnValue;
     int id;
-//#define DYNAMIC
+#define DYNAMIC
 #ifdef DYNAMIC
     pthread_mutex_t* global_lock;
     double* global_factor;
@@ -1099,11 +1099,12 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
     Mat imageBuffer(image.rows + 1, image.cols + 1, CV_8U);
     vector<Rect> candidates;
 
-#define NUM_THREADS 8
+#define NUM_THREADS 6
     Size originalWindowSize = getOriginalWindowSize();
     pthread_t threads[NUM_THREADS];
     struct thread_data thread_args[MAX_THREADS];        
     int i = 0;
+	vector<Rect> threadCandidates[NUM_THREADS];
 #ifdef DYNAMIC
     pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER;
     double global_factor = 1;
@@ -1123,7 +1124,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
         for (int j = 0; j < NUM_THREADS; j++) {
             thread_args[i].scaleFactor *= scaleFactor;
         }
-        thread_args[i].candidates = &candidates;
+        thread_args[i].candidates = &threadCandidates[i];
         thread_args[i].rejectLevels = &rejectLevels;
         thread_args[i].levelWeights = &levelWeights;
         thread_args[i].outputRejectLevels = outputRejectLevels;
@@ -1142,14 +1143,21 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
         factor *= scaleFactor;
     }
 
+	int totalCandidates = 0;
     for ( i = 0; i < (NUM_THREADS-1); i++) {
         pthread_join(threads[i], NULL);
+		totalCandidates += threadCandidates[i].size();
+		//candidates.insert(candidates.end(), threadCandidates[i].begin(), threadCandidates[i].end());
     }
 
+    //objects.resize(candidates.size());
+    //std::copy(candidates.begin(), candidates.end(), objects.begin());
+	objects.reserve(totalCandidates);
+	for (int i = 0; i < NUM_THREADS; i++) {
+		objects.insert(objects.end(), threadCandidates[i].begin(), threadCandidates[i].end());
+	}
 
-    objects.resize(candidates.size());
-    std::copy(candidates.begin(), candidates.end(), objects.begin());
-
+	/*
     if( outputRejectLevels )
     {
         //groupRectangles( objects, rejectLevels, levelWeights, minNeighbors, GROUP_EPS );
@@ -1160,6 +1168,7 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
         //groupRectangles( objects, minNeighbors, GROUP_EPS );
         PROFILE_FUNC(t_groupRectangles, groupRectangles( objects, minNeighbors, GROUP_EPS ));
     }
+	*/
 }
 
 //bool detectFactoredScale(CascadeClassifier* casClass, const Mat& grayImage, const Mat& imageBuffer, Size originalWindowSize, Size maxObjectSize
@@ -1237,6 +1246,12 @@ void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& object
 	PROFILE_FUNC(t_detectMultiScaleInternal, detectMultiScale( image, objects, fakeLevels, fakeWeights, scaleFactor,
         minNeighbors, flags, minObjectSize, maxObjectSize, false )
 	);
+}
+
+void CascadeClassifier::groupRectanglesPipeline(vector<Rect>& objects, int minNeighbors)
+{
+	const double GROUP_EPS = 0.2;
+	PROFILE_FUNC(t_groupRectangles, groupRectangles( objects, minNeighbors, GROUP_EPS ));
 }
 
 bool CascadeClassifier::Data::read(const FileNode &root)

@@ -399,6 +399,8 @@ public:
     int getFeatureType() const;
     bool setImage( const Mat& );
 
+	static void groupRectanglesPipeline(vector<Rect>& objects, int minNeighbors);
+
     //virtual bool detectSingleScale( const Mat& image, int stripCount, Size processingRectSize,
     //                                int stripSize, int yStep, double factor, vector<Rect>& candidates );
 
@@ -468,7 +470,7 @@ protected:
     };
 
     Data data;
-#define MAX_THREADS 8
+#define MAX_THREADS 6
     Ptr<FeatureEvaluator> featureEvaluator[MAX_THREADS];
     Ptr<CvHaarClassifierCascade> oldCascade;
 
