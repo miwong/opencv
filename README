@@ -1,2 +1,14 @@
-See http://opencv.willowgarage.com
+Parallelization of Face Detection in Software
 
+This is the code for a project in ECE1747 Parallel Programming.  Various parallelization and optimization techniques were employed to improve performance for the Viola-Jones face detection algorithm.  These changes are meant to be used with the corresponding changes in the MEVBench repository (MEVBench is a computer vision benchmark suite designed for mobile devices).
+
+Implemented optimizations include:
+- Pipelining
+- Loop parallellization (synchronized and scheduled using a ticket-like scheme)
+- Cache tiling
+
+Report (containing speedup results and implementation details) can be found at:
+http://individual.utoronto.ca/miwong/files/FaceDetectionParallelization.pdf
+
+For more details on OpenCV:
+See http://opencv.willowgarage.com
